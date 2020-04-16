@@ -1,0 +1,140 @@
+
+===
+title: "Comparing masks vs. no mask notebook"
+author: "Kristopher Purens and Abigail Purens"
+output: html_document
+===
+---
+### Data sources: 
+Bae S, Kim M-C, Kim JY, Cha H-H, Lim JS, Jung J, et al. Effectiveness of Surgical and Cotton Masks in Blocking SARS–CoV-2: A Controlled Comparison in 4 Patients. Annals of Internal Medicine [Internet]. 2020 Apr 6 [cited 2020 Apr 7]; Available from: https://doi.org/10.7326/M20-1342
+
+Johnson DF, Druce JD, Birch C, Grayson ML. A Quantitative Assessment of the Efficacy of Surgical and N95 Masks to Filter Influenza Virus in Patients with Acute Influenza Infection. Clin Infect Dis. 2009 Jul 15;49(2):275–7.
+
+---
+### Methods
+We paired results for both studies, with one control trial compared to one masked trial. To normalize for differing viral load between patients, we calculated the difference between the control and experimental trials, ΔL, as the log10 reduction in observed virus with the mask. Trials with no detection (ND) results for both control and experimental trials were excluded, as they do not provide any information about mask efficacy; this resulted in 14 valid trials from Johnson et al and 7 valid trials from Bae et al. Consistent with Johnson et al, specimens from Bae et al were treated as having a viral load arbitrarily just beyond their stated detection limit; with the lowest detection reported in Bae et al as 1.42 log/ml, equivalent to 26 viral particles/ml, we chose 1.4 log/ml for ND, corresponding to 25 viral particles/ml. We used the number of 40.1 cycles for ND as used by Johnson et al. We converted the cycle results from Johnson et al to log copies, using cycle efficiency = 1.76 calculated from Bae’s data.
+
+```{r echo=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(hrbrthemes)
+library(purrr)
+library(infer)
+library(modelr)
+data <- tibble(read.csv("data_combined.csv"))
+
+```
+Load and display
+```{r}
+data
+```
+
+```{r}
+summary(data$log_10_reduction)
+
+```
+
+
+```{r}
+p <- data %>% 
+  select(log_10_reduction,study) %>% 
+  drop_na %>% 
+  ggplot(aes(x=log_10_reduction, fill=study)) + 
+  geom_histogram(position="dodge",
+                 breaks=c(-1.5,0,1,2,3,4,5.5),
+                 color="black",
+                 alpha=.6, 
+                 fill="#FFFFFF",
+                 size=1.5) +
+  labs(title="Effectiveness of masks for reducing delivered viral load ") +
+  labs(x="Log10 reduction of viral load", y="Count") +
+  xlim(-1.5,5.5) +
+  facet_grid(study ~ .) #+#  labels = c("Bae et. al. : SARS-CoV-2","Johnson et. al. : Influenza")
+#+
+  #scale_fill_manual(values=c("#999999", "#444444", "#56B4E9"))
+p
+```
+#### calc means
+```{r}
+
+data %>% 
+select(study,log_10_reduction)%>%
+drop_na() %>%
+group_by(study) %>%
+summarize(mean(log_10_reduction))
+
+```
+
+Run a permutation test.
+This calculated the difference between J. et al and B.et al as a mean difference between two samples by chance. 
+If the real difference betweeen J and B et al is within the range provided by the permutation test, we do not have sufficient evidence they are different. 
+
+```{r}
+permute_data = select(data, log_10_reduction, study) %>%
+ drop_na()
+
+# function that calcs difference in the means of the permutations
+compare_groups = function(df){
+test_statistic =   df %>% as.data.frame()  %>% group_by(study) %>% summarise(center = mean(log_10_reduction))
+
+#returns j_et_al - b_et_al
+
+return( test_statistic$center[2] - test_statistic$center[1])
+}
+
+h0_from_Bai =  compare_groups(permute_data)
+print(h0_from_Bai)
+```
+
+Perform permutation and save result
+```{r}
+set.seed(0)
+permute_repeats <- permute_data %>% 
+group_by(study) %>%
+drop_na() %>%
+permute(1000,study)
+results <- map_dbl(permute_repeats$perm,  compare_groups)
+```
+Sumamrize and plot results ffor two sided and one-sided tests. Vertical line is test statistic for difference Johnson - Bae
+```{r}
+
+j <- data.frame(results) %>% 
+  ggplot(aes(results)) + 
+          geom_histogram(
+              aes(y=after_stat(count/sum(count)),
+              alpha=.6,
+              size=1.4,
+              boundary=0,
+              binwidth=.1)) +
+  geom_vline(xintercept = h0_from_Bai,color='red',size=1.2) +
+  labs(title="Comparing results of Bae et. al. and Johnson et. al. ") +
+  labs(x="Permutation difference, log10", y="Count") 
+j
+
+```
+Compare histogram against original data mean (p value)
+How many of the permutations are larger than the observed 
+```{r}
+
+k <- data.frame(results) %>% 
+  ggplot(aes(abs(results)))+ 
+            geom_histogram(
+              aes(y=after_stat(count/sum(count))),
+              alpha=.6,
+              size=1.4,
+              boundary=0,
+              binwidth=.1) +
+                
+  geom_vline(xintercept = h0_from_Bai,color='red',size=1.2) +
+  labs(title="Comparing results of Bae et. al. and Johnson et. al. ") +
+  labs(x="Test statistic, permuted difference, log10", y="Density") 
+k
+
+```
+P Value for hypothesis that Bai's results were different than Johnson's
+```{r}
+
+sum((h0_from_Bai) <= abs(results)) / 1000
+
+```
+
